@@ -1,0 +1,95 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Deploys a Regional AWS WAFv2 Web ACL (WEBACL_MLPS) with four essential AWS Managed Rule Groups and a default action of ALLOW.
+
+Parameters:
+  WebAclName:
+    Type: String
+    Default: WEBACL_MLPS
+    Description: The name for the Web ACL.
+  WebACLScope:
+    Type: String
+    Default: REGIONAL
+    AllowedValues:
+      - CLOUDFRONT
+      - REGIONAL
+    Description: The scope of the Web ACL. Use CLOUDFRONT for CloudFront, REGIONAL for ALB, API Gateway, etc.
+
+Resources:
+  # The WAF Web ACL Resource
+  WebACLMLPS:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Ref WebAclName
+      Scope: !Ref WebACLScope
+      # Metric name is required for CloudWatch monitoring
+      VisibilityConfig:
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "${WebAclName}Metric"
+        SampledRequestsEnabled: true
+
+      # Default Action: Allow requests that don't match any rule
+      DefaultAction:
+        Allow: {}
+
+      # List of Rules (Managed Rule Groups)
+      Rules:
+        # Priority 1: AWS Managed Rules IP Reputation List
+        - Name: AWSManagedIPReputation
+          Priority: 1
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesAmazonIpReputationList
+          Action:
+            Block: {} # Recommended action for IP reputation
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: ManagedIPReputationMetric
+            SampledRequestsEnabled: true
+
+        # Priority 2: AWS Managed Rules Anonymous IP List
+        - Name: AWSManagedAnonymousIPList
+          Priority: 2
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesAnonymousIpList
+          Action:
+            Block: {} # Recommended action for anonymous IPs (VPNs, TOR)
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: ManagedAnonymousIPMetric
+            SampledRequestsEnabled: true
+
+        # Priority 3: AWS Managed Rules Core Rule Set (CRS)
+        - Name: AWSManagedCoreRuleSet
+          Priority: 3
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+          Action:
+            Block: {} # Recommended action for common web threats
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: ManagedCoreRuleSetMetric
+            SampledRequestsEnabled: true
+
+        # Priority 4: AWS Managed Rules Admin Protection Rule Set
+        - Name: AWSManagedAdminProtection
+          Priority: 4
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesAdminProtectionRuleSet
+          Action:
+            Block: {} # Recommended action for admin page attacks
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: ManagedAdminProtectionMetric
+            SampledRequestsEnabled: true
+
+Outputs:
+  WebACLArn:
+    Description: The ARN of the newly created WAF Web ACL.
+    Value: !GetAtt WebACLMLPS.Arn

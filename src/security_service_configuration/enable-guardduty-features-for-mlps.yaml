@@ -1,0 +1,37 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: |
+  Enables Amazon GuardDuty Detector in the current AWS account and Region,
+  activating only the Malware Protection plan for EC2 instances.
+
+Parameters:
+  FindingPublishingFrequency:
+    Type: String
+    Default: FIFTEEN_MINUTES
+    AllowedValues:
+      - FIFTEEN_MINUTES
+      - ONE_HOUR
+      - SIX_HOURS
+    Description: The frequency with which GuardDuty findings are published.
+
+Resources:
+  # 1. The Core GuardDuty Detector
+  GuardDutyDetector:
+    Type: AWS::GuardDuty::Detector
+    Properties:
+      # Enable the detector, which activates Foundational protection (CloudTrail, VPC Flow Logs, DNS logs)
+      Enable: true
+      FindingPublishingFrequency: !Ref FindingPublishingFrequency
+      # --- Enable only Malware Protection Feature ---
+      Features:
+        # Malware Protection (On-demand malware scanning of EC2 instances with findings)
+        - Name: MALWARE_PROTECTION
+          Status: ENABLED
+          AdditionalConfiguration:
+            # Sub-feature for Malware Protection: Scan EC2 instances with new findings
+            - Name: SCAN_EC2_INSTANCE_WITH_FINDINGS
+              Status: ENABLED
+
+Outputs:
+  GuardDutyDetectorId:
+    Description: The ID of the newly created GuardDuty Detector.
+    Value: !Ref GuardDutyDetector

@@ -1,0 +1,130 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: |
+  Enables AWS Security Hub, sets up AWS Config (a required prerequisite), 
+  enables the AWS Foundational Security Best Practices standard, and ensures 
+  finding ingestion from GuardDuty and Inspector.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: AWS Config Configuration
+        Parameters:
+          - ConfigRecorderResourceTypes
+          - S3BucketName
+
+Parameters:
+  ConfigRecorderResourceTypes:
+    Type: CommaDelimitedList
+    Default: ALL_SUPPORTED_RESOURCE_TYPES
+    Description: Resource types for AWS Config to record. Use ALL_SUPPORTED_RESOURCE_TYPES 
+                 or a comma-separated list of specific resource types.
+  S3BucketName:
+    Type: String
+    Description: The name for the S3 bucket where AWS Config will store configuration history and snapshots. 
+                 Must be globally unique.
+
+Resources:
+
+  # --- 1. AWS Config Prerequisites (Required for Security Hub Standards Checks) ---
+  
+  # IAM Role for AWS Config
+  ConfigServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: config.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWS_ConfigRole
+
+  # S3 Bucket for AWS Config Logs
+  ConfigBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref S3BucketName
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # AWS Config Recorder (Starts recording resource configurations)
+  ConfigRecorder:
+    Type: AWS::Config::ConfigurationRecorder
+    Properties:
+      Name: default
+      RoleARN: !GetAtt ConfigServiceRole.Arn
+      RecordingGroup:
+        AllSupported: !If [IsAllSupported, true, false]
+        IncludeGlobalResourceTypes: true # Necessary for IAM checks
+        ResourceTypes: !If [IsAllSupported, !Ref "AWS::NoValue", !Ref ConfigRecorderResourceTypes]
+
+  # AWS Config Delivery Channel (Specifies where Config sends the recorded data)
+  ConfigDeliveryChannel:
+    Type: AWS::Config::DeliveryChannel
+    Properties:
+      Name: default
+      S3BucketName: !Ref ConfigBucket
+
+  # Condition to check if ALL_SUPPORTED_RESOURCE_TYPES is used
+  IsAllSupported:
+    Condition: !Equals [!Select [0, !Ref ConfigRecorderResourceTypes], "ALL_SUPPORTED_RESOURCE_TYPES"]
+
+  # --- 2. Enable AWS Security Hub ---
+
+  # Enable the Security Hub Service
+  SecurityHub:
+    Type: AWS::SecurityHub::Hub
+    Properties:
+      # Setting EnableDefaultStandards to false ensures we only enable the specific standard below.
+      # ControlFindingGenerator: 'SECURITY_CONTROL' is the recommended modern setting.
+      EnableDefaultStandards: false
+      ControlFindingGenerator: SECURITY_CONTROL
+
+  # --- 3. Enable AWS Foundational Security Best Practices Standard ---
+
+  # Enable the specific standard using its ARN. Note the partition and region pseudoparameters.
+  FoundationalSecurityStandard:
+    Type: AWS::SecurityHub::Standard
+    Properties:
+      StandardsArn: !Sub 
+        |
+          arn:${AWS::Partition}:securityhub:${AWS::Region}::standards/aws-foundational-security-best-practices/v/1.0.0
+    DependsOn: SecurityHub # Ensure Security Hub is enabled first
+
+  # --- 4. Finding Ingestion (GuardDuty and Inspector) ---
+  
+  # Security Hub automatically creates product subscriptions for GuardDuty and Inspector 
+  # when the Hub is enabled, provided those services are also enabled. The resources 
+  # below explicitly ensure this integration is active.
+
+  # Enable GuardDuty findings ingestion (optional, often automatic, but explicit is better)
+  GuardDutyProductSubscription:
+    Type: AWS::SecurityHub::ProductSubscription
+    Properties:
+      ProductArn: !Sub arn:${AWS::Partition}:securityhub:${AWS::Region}::product/guardduty/default
+      # Subscription is to the current account's Security Hub
+      SubscriptionArn: !Sub arn:${AWS::Partition}:securityhub:${AWS::Region}::hub/default
+    DependsOn: SecurityHub
+
+  # Enable Inspector findings ingestion (optional, often automatic, but explicit is better)
+  InspectorProductSubscription:
+    Type: AWS::SecurityHub::ProductSubscription
+    Properties:
+      ProductArn: !Sub arn:${AWS::Partition}:securityhub:${AWS::Region}::product/inspector/default
+      SubscriptionArn: !Sub arn:${AWS::Partition}:securityhub:${AWS::Region}::hub/default
+    DependsOn: SecurityHub
+
+Outputs:
+  SecurityHubArn:
+    Description: The ARN of the Security Hub deployment.
+    Value: !GetAtt SecurityHub.Arn
+  ConfigRecorderRole:
+    Description: The ARN of the IAM Role used by AWS Config.
+    Value: !GetAtt ConfigServiceRole.Arn

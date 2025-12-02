@@ -1,0 +1,98 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: |
+  Enables Amazon Inspector V2 for the current AWS account and Region,
+  explicitly activating scanning for EC2 instances only (excluding ECR and Lambda).
+
+Resources:
+
+  # 1. IAM Role for the Lambda Function
+  InspectorEnablerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Policy for Lambda logging to CloudWatch
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: InspectorV2EnablePolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  # Required permissions for the Inspector2 Enable API call
+                  - inspector2:Enable
+                Resource: '*'
+
+  # 2. Lambda Function to Enable Inspector V2
+  InspectorEnablerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: InspectorV2Enabler
+      Handler: index.lambda_handler
+      Runtime: python3.11
+      Role: !GetAtt InspectorEnablerRole.Arn
+      Timeout: 60 # Allows enough time for the API call to complete
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import cfnresponse
+          import logging
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def lambda_handler(event, context):
+              response_data = {}
+              try:
+                  inspector_client = boto3.client('inspector2')
+                  request_type = event['RequestType']
+                  
+                  # The resource types to enable (EC2_COMPUTE is for EC2 instance scanning)
+                  resource_types_to_enable = ['EC2_COMPUTE']
+
+                  if request_type == 'Create' or request_type == 'Update':
+                      logger.info(f"Enabling Inspector V2 for resource types: {resource_types_to_enable}")
+                      
+                      # Call the Inspector2 Enable API
+                      inspector_client.enable(resourceTypes=resource_types_to_enable)
+
+                      logger.info("Inspector V2 successfully enabled.")
+                      response_data['Message'] = 'Inspector V2 enabled for EC2 only.'
+                  
+                  elif request_type == 'Delete':
+                      # Note: Deactivating the service is usually done manually or via a separate API call.
+                      # We'll treat DELETE as a successful operation for stack cleanup purposes.
+                      logger.info("Delete operation requested. No action taken on Inspector V2.")
+                      response_data['Message'] = 'Inspector V2 state preserved on stack delete.'
+
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data, "CustomResourcePhysicalId")
+                  
+              except Exception as e:
+                  logger.error(f"Error enabling Inspector V2: {e}")
+                  response_data['Error'] = str(e)
+                  cfnresponse.send(event, context, cfnresponse.FAILED, response_data, "CustomResourcePhysicalId")
+
+  # 3. Custom Resource to Trigger the Lambda Function
+  EnableEC2Inspector:
+    Type: Custom::InspectorV2EC2Enabler
+    Properties:
+      ServiceToken: !GetAtt InspectorEnablerFunction.Arn
+      # This property is a simple token to ensure the custom resource runs
+      # when the stack is created or updated.
+      TriggerValue: !Sub "Enable-EC2-Only-At-${AWS::Region}" 
+
+Outputs:
+  LambdaFunctionName:
+    Description: The name of the Lambda function used to enable Inspector V2.
+    Value: !Ref InspectorEnablerFunction
+  InspectorRoleArn:
+    Description: The ARN of the IAM Role used by the Inspector V2 Enabler Lambda.
+    Value: !GetAtt InspectorEnablerRole.Arn
